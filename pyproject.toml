@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "maldi-tof-domain-shift"
+version = "0.1.0"
+description = ""
+authors = ["Samito-uc3m <100429112@alumnos.uc3m>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pillow = "11.0.0"
+torch = "2.2.2"
+torchaudio = "2.2.2"
+torchvision = "0.17.2"
+maldi-nn = "^0.2.5"
+pydantic = "^2.10.3"
+pandas = "^2.2.3"
+numpy = "^2.1.3"
+pydantic-settings = "^2.6.1"
+pre-commit = "^4.0.1"
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.1"
+black = "^24.10.0"
+isort = "^5.13.2"
+pre-commit = "^4.0.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
