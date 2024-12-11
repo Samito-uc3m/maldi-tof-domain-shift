@@ -6,31 +6,33 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # Data paths
     DRIAMS_B_PATH: Path = Path(
-        "/Users/sam/Documents/Universidad/Master/TFM/maldi-tof-domain-shift/data/DRIAMS-B"
+        "/home/dive001/Documents/Master/maldi-tof-domain-shift/data/DRIAMS-B"
     )
     DRIAMS_C_PATH: Path = Path(
-        "/Users/sam/Documents/Universidad/Master/TFM/maldi-tof-domain-shift/data/DRIAMS-C"
+        "/home/dive001/Documents/Master/maldi-tof-domain-shift/data/DRIAMS-C"
     )
     DRIAMS_D_PATH: Path = Path(
-        "/Users/sam/Documents/Universidad/Master/TFM/maldi-tof-domain-shift/data/DRIAMS-D"
+        "/home/dive001/Documents/Master/maldi-tof-domain-shift/data/DRIAMS-D"
     )
+    DRIAMS_SAVE_PATH: Path = Path("/transformed_6000/2018")
 
     # Model saving/loading paths
     MODEL_PATH: Path = Path(
-        "/Users/sam/Documents/Universidad/Master/TFM/maldi-tof-domain-shift/models"
+        "/home/dive001/Documents/Master/maldi-tof-domain-shift/models"
     )
-    GENERATOR_1_TO_2_PATH: Path = MODEL_PATH / "generator_1_to_2.pth"
-    GENERATOR_2_TO_1_PATH: Path = MODEL_PATH / "generator_2_to_1.pth"
-    DISCRIMINATOR_1_PATH: Path = MODEL_PATH / "discriminator_1.pth"
-    DISCRIMINATOR_2_PATH: Path = MODEL_PATH / "discriminator_2.pth"
+    GENERATOR_1_TO_2_PATH: Path = MODEL_PATH / "generator_C_to_D.pth"
+    GENERATOR_2_TO_1_PATH: Path = MODEL_PATH / "generator_D_to_C.pth"
+    DISCRIMINATOR_1_PATH: Path = MODEL_PATH / "discriminator_C.pth"
+    DISCRIMINATOR_2_PATH: Path = MODEL_PATH / "discriminator_D.pth"
+    CLASSIFIER_PATH: Path = MODEL_PATH / "classifier_C.pth"
 
     # Batch parameters
-    BATCH_SIZE: int = 16
+    BATCH_SIZE: int = 4
     BATCH_SHUFFLE: bool = True
     BATCH_NUM_WORKERS: int = 2
 
     # Training parameters
-    EPOCHS: int = 100
+    EPOCHS: int = 10
     LR: float = 0.0002
 
     # Label values

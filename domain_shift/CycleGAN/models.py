@@ -225,7 +225,7 @@ class CycleGAN:
 
                 # Print the losses.
                 print(
-                    f"Epoch [{epoch}/{settings.EPOCHS}] Batch [{i}/{len(data_loader_1)}] "
+                    f"Epoch [{epoch+1}/{settings.EPOCHS}] Batch [{i+1}/{len(data_loader_1)}] "
                     f"Loss G: {loss_G.item():.4f}, Loss D 1: {loss_D_1.item():.4f}, Loss D 2: {loss_D_2.item():.4f}"
                 )
 
