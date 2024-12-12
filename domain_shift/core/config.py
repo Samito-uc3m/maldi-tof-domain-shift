@@ -14,7 +14,11 @@ class Settings(BaseSettings):
     DRIAMS_D_PATH: Path = Path(
         "/home/dive001/Documents/Master/maldi-tof-domain-shift/data/DRIAMS-D"
     )
-    DRIAMS_SAVE_PATH: Path = Path("/transformed_6000/2018")
+
+    # Images folder
+    IMAGES_PATH: Path = Path(
+        "/home/dive001/Documents/Master/maldi-tof-domain-shift/images"
+    )
 
     # Model saving/loading paths
     MODEL_PATH: Path = Path(
