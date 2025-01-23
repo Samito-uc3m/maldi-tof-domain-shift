@@ -9,12 +9,7 @@ driams_2 = DRIAMS_bin_to_df(settings.DRIAMS_D_PATH)
 
 # Filter by the 4 species with most representation
 print("Filtering by the 4 species with most representation...")
-most_represented_species = [
-    "Escherichia coli",
-    "Staphylococcus aureus",
-    "Enterococcus faecalis",
-    "Pseudomonas aeruginosa",
-]
+most_represented_species = ["Escherichia coli"]
 driams_1 = driams_1[driams_1["species"].isin(most_represented_species)]
 driams_2 = driams_2[driams_2["species"].isin(most_represented_species)]
 
@@ -22,6 +17,9 @@ driams_2 = driams_2[driams_2["species"].isin(most_represented_species)]
 print("Creating DataLoaders...")
 driams_1_data_loader = get_data_loader(driams_1)
 driams_2_data_loader = get_data_loader(driams_2)
+
+print("DataLoader 1 length:", len(driams_1_data_loader))
+print("DataLoader 2 length:", len(driams_2_data_loader))
 
 # Create the model
 print("Creating CycleGAN model...")

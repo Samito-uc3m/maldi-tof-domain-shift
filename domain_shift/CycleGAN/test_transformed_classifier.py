@@ -12,12 +12,7 @@ driams = DRIAMS_bin_to_df(settings.DRIAMS_D_PATH)
 
 # Filter by the 4 species with most representation
 print("Filtering by the 4 species with most representation...")
-most_represented_species = [
-    "Escherichia coli",
-    "Staphylococcus aureus",
-    "Enterococcus faecalis",
-    "Pseudomonas aeruginosa",
-]
+most_represented_species = ["Escherichia coli"]
 driams = driams[driams["species"].isin(most_represented_species)]
 
 # Map the species to integers
