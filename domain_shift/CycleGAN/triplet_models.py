@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from domain_shift.core.config import settings
+from domain_shift.CycleGAN.triplet_data_loader import CosineLosslessTripletLoss
 
 
 class ResidualBlock(nn.Module):
@@ -110,140 +111,297 @@ class Discriminator(nn.Module):
 
 
 class CycleGAN:
-    def __init__(self):
-        # Initialize the device
+    def __init__(
+        self,
+        lambda_multiplier: float = settings.LAMBDA_MULTIPLIER,
+        epochs: int = settings.EPOCHS,
+        lr: float = settings.LR,
+        patience: int = settings.PATIENCE,
+        triplet_weight: float = settings.TRIPLET_WEIGHT,  # <-- Weight for triplet loss
+    ):
+        # Initialize device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.lambda_multiplier = lambda_multiplier
+        self.epochs = epochs
+        self.patience = patience
+        self.triplet_weight = triplet_weight
 
-        # Initialize the generators and discriminators.
+        # Initialize generators and discriminators
         self.generator_1_to_2 = Generator().to(self.device)
         self.generator_2_to_1 = Generator().to(self.device)
         self.discriminator_1 = Discriminator().to(self.device)
         self.discriminator_2 = Discriminator().to(self.device)
 
-        # Initialize the optimizers.
+        # Initialize optimizers
         self.optimizer_G = torch.optim.Adam(
             chain(
                 self.generator_1_to_2.parameters(), self.generator_2_to_1.parameters()
             ),
-            lr=settings.LR,
+            lr=lr,
             betas=(0.5, 0.999),
         )
         self.optimizer_D = torch.optim.Adam(
             chain(self.discriminator_1.parameters(), self.discriminator_2.parameters()),
-            lr=settings.LR,
+            lr=lr,
             betas=(0.5, 0.999),
         )
 
-        # Initialize the loss functions.
+        # Initialize loss functions
         self.criterion_GAN = torch.nn.MSELoss().to(self.device)
         self.criterion_cycle = torch.nn.L1Loss().to(self.device)
         self.criterion_identity = torch.nn.L1Loss().to(self.device)
+        self.criterion_triplet = CosineLosslessTripletLoss().to(self.device)
 
         # Error trackers
-        self.identity_error_loss = []
         self.gan_error_loss = []
         self.cycle_error_loss = []
+        self.triplet_error_loss = []
+        self.identity_error_loss = []
 
-    def train(self, data_loader_1, data_loader_2):
-        # Set the models to training mode.
+    def train(
+        self,
+        train_data_loader_1,
+        train_data_loader_2,
+        val_data_loader_1,
+        val_data_loader_2,
+    ):
+        # Set models to training mode
         self.generator_1_to_2.train()
         self.generator_2_to_1.train()
         self.discriminator_1.train()
         self.discriminator_2.train()
 
-        # Train the models.
+        # Begin training
+        for epoch in range(self.epochs):
+            gan_error_loss = 0.0
+            cycle_error_loss = 0.0
+            identity_error_loss = 0.0
+            triplet_error_loss = 0.0
 
-        for epoch in range(settings.EPOCHS):
-            identity_error_loss = 0
-            gan_error_loss = 0
-            cycle_error_loss = 0
-            for i, (real_1, real_2) in enumerate(zip(data_loader_1, data_loader_2)):
-                # Move data to the device.
-                real_1 = real_1.to(self.device)
-                real_2 = real_2.to(self.device)
+            for i, (
+                (real_1_anchor, real_1_positive, real_1_negative),
+                (real_2_anchor, real_2_positive, real_2_negative),
+            ) in enumerate(zip(train_data_loader_1, train_data_loader_2)):
+                # ---------------------
+                # Move triplets to device
+                # ---------------------
+                real_1_anchor = real_1_anchor.to(self.device)
+                real_1_positive = real_1_positive.to(self.device)
+                real_1_negative = real_1_negative.to(self.device)
 
-                # Set the labels for real and fake data.
+                real_2_anchor = real_2_anchor.to(self.device)
+                real_2_positive = real_2_positive.to(self.device)
+                real_2_negative = real_2_negative.to(self.device)
+
+                # ---------------------
+                # Labels for real/fake
+                # ---------------------
+                batch_size = real_1_anchor.size(0)
                 real_label = torch.full(
-                    (real_1.size(0), 1, 1), settings.REAL_LABEL, device=self.device
+                    (batch_size, 1, 1), settings.REAL_LABEL, device=self.device
                 )
                 fake_label = torch.full(
-                    (real_1.size(0), 1, 1), settings.FAKE_LABEL, device=self.device
+                    (batch_size, 1, 1), settings.FAKE_LABEL, device=self.device
                 )
 
-                # Train the generators.
+                # =================================================
+                #              1) Train Generators
+                # =================================================
                 self.optimizer_G.zero_grad()
+
+                #
+                # --- a) Domain 1 -> Domain 2 ---
+                #
+                # We'll treat "anchor" as the main sample for cycle, but we
+                # also forward positive/negative through the generator
+                # for the triplet loss.
+
+                # Fake from anchor
+                fake_2_anchor = self.generator_1_to_2(real_1_anchor)
+                # Fake from pos/neg
+                fake_2_positive = self.generator_1_to_2(real_1_positive)
+                fake_2_negative = self.generator_1_to_2(real_1_negative)
+
+                # GAN loss for anchor
+                loss_GAN_1_to_2 = self.criterion_GAN(
+                    self.discriminator_2(fake_2_anchor), fake_label  # Is this correct?
+                )
+
+                # Cycle: anchor -> fake2 -> recovered1
+                recovered_1_anchor = self.generator_2_to_1(fake_2_anchor)
+                loss_cycle_1_2_1 = self.criterion_cycle(
+                    recovered_1_anchor, real_1_anchor
+                )
 
                 # Identity loss.
                 loss_id_1 = self.criterion_identity(
-                    self.generator_2_to_1(real_1), real_1
-                )
-                loss_id_2 = self.criterion_identity(
-                    self.generator_1_to_2(real_2), real_2
+                    self.generator_2_to_1(real_1_anchor), real_1_anchor
                 )
 
-                # GAN loss.
-                fake_2 = self.generator_1_to_2(real_1)
-                loss_GAN_1_to_2 = self.criterion_GAN(
-                    self.discriminator_2(fake_2), real_label
-                )
-                fake_1 = self.generator_2_to_1(real_2)
+                #
+                # --- b) Domain 2 -> Domain 1 ---
+                #
+                # Similarly for domain 2 anchor
+
+                fake_1_anchor = self.generator_2_to_1(real_2_anchor)
+                fake_1_positive = self.generator_2_to_1(real_2_positive)
+                fake_1_negative = self.generator_2_to_1(real_2_negative)
+
+                # GAN loss for anchor
                 loss_GAN_2_to_1 = self.criterion_GAN(
-                    self.discriminator_1(fake_1), real_label
+                    self.discriminator_1(fake_1_anchor), fake_label  # Is this correct?
                 )
 
-                # Cycle loss.
-                recovered_1 = self.generator_2_to_1(fake_2)
-                loss_cycle_1_2_1 = self.criterion_cycle(recovered_1, real_1)
-                recovered_2 = self.generator_1_to_2(fake_1)
-                loss_cycle_2_1_2 = self.criterion_cycle(recovered_2, real_2)
+                # Cycle: anchor -> fake1 -> recovered2
+                recovered_2_anchor = self.generator_1_to_2(fake_1_anchor)
+                loss_cycle_2_1_2 = self.criterion_cycle(
+                    recovered_2_anchor, real_2_anchor
+                )
 
-                # Total loss.
+                # Identity loss.
+                loss_id_2 = self.criterion_identity(
+                    self.generator_1_to_2(real_2_anchor), real_2_anchor
+                )
+
+                #
+                # --- c) Triplet Losses (Domain 1 & Domain 2) ---
+                #
+                # Flatten or embed the generated images for anchor, positive, negative.
+                # We'll compute a separate triplet loss for each domain.
+
+                # Domain 1->2 triplet
+                anchor_emb_1to2 = fake_2_anchor.view(batch_size, -1)
+                positive_emb_1to2 = fake_2_positive.view(batch_size, -1)
+                negative_emb_1to2 = fake_2_negative.view(batch_size, -1)
+                loss_triplet_1to2 = self.criterion_triplet(
+                    anchor_emb_1to2, positive_emb_1to2, negative_emb_1to2
+                )
+
+                # Domain 2->1 triplet
+                anchor_emb_2to1 = fake_1_anchor.view(batch_size, -1)
+                positive_emb_2to1 = fake_1_positive.view(batch_size, -1)
+                negative_emb_2to1 = fake_1_negative.view(batch_size, -1)
+                loss_triplet_2to1 = self.criterion_triplet(
+                    anchor_emb_2to1, positive_emb_2to1, negative_emb_2to1
+                )
+
+                loss_triplet = loss_triplet_1to2 + loss_triplet_2to1
+
+                #
+                # --- d) Total generator loss ---
+                #
                 loss_G = (
-                    10 * (loss_id_1 + loss_id_2)
-                    + (loss_GAN_1_to_2 + loss_GAN_2_to_1)
-                    + 10 * (loss_cycle_1_2_1 + loss_cycle_2_1_2)
+                    loss_GAN_1_to_2
+                    + loss_GAN_2_to_1
+                    + self.lambda_multiplier
+                    * (loss_cycle_1_2_1 + loss_cycle_2_1_2 + loss_id_1 + loss_id_2)
+                    + self.triplet_weight * loss_triplet
                 )
+
                 loss_G.backward()
                 self.optimizer_G.step()
 
-                # Update loss
-                identity_error_loss += loss_id_1 + loss_id_2
-                gan_error_loss += loss_GAN_1_to_2 + loss_GAN_2_to_1
-                cycle_error_loss += loss_cycle_1_2_1 + loss_cycle_2_1_2
+                # Accumulate for logging
+                gan_error_loss += loss_GAN_1_to_2.item() + loss_GAN_2_to_1.item()
+                cycle_error_loss += loss_cycle_1_2_1.item() + loss_cycle_2_1_2.item()
+                identity_error_loss += loss_id_1.item() + loss_id_2.item()
+                triplet_error_loss += loss_triplet.item()
 
-                # Train the discriminators.
+                # =================================================
+                #          2) Train Discriminators
+                # =================================================
                 self.optimizer_D.zero_grad()
 
-                # Discriminator 1 loss.
-                loss_real = self.criterion_GAN(self.discriminator_1(real_1), real_label)
-                fake_1 = self.generator_2_to_1(real_2)
-                loss_fake = self.criterion_GAN(
-                    self.discriminator_1(fake_1.detach()), fake_label
+                #
+                # --- Discriminator 1 (domain1) ---
+                #
+                # Real
+                loss_real_d1 = self.criterion_GAN(
+                    self.discriminator_1(real_1_anchor), real_label
                 )
-                loss_D_1 = (loss_real + loss_fake) / 2
+                # Fake
+                fake_1_anchor_detached = fake_1_anchor.detach()
+                loss_fake_d1 = self.criterion_GAN(
+                    self.discriminator_1(fake_1_anchor_detached), fake_label
+                )
+                loss_D_1 = (loss_real_d1 + loss_fake_d1) / 2
                 loss_D_1.backward()
 
-                # Discriminator 2 loss.
-                loss_real = self.criterion_GAN(self.discriminator_2(real_2), real_label)
-                fake_2 = self.generator_1_to_2(real_1)
-                loss_fake = self.criterion_GAN(
-                    self.discriminator_2(fake_2.detach()), fake_label
+                #
+                # --- Discriminator 2 (domain2) ---
+                #
+                loss_real_d2 = self.criterion_GAN(
+                    self.discriminator_2(real_2_anchor), real_label
                 )
-                loss_D_2 = (loss_real + loss_fake) / 2
+                fake_2_anchor_detached = fake_2_anchor.detach()
+                loss_fake_d2 = self.criterion_GAN(
+                    self.discriminator_2(fake_2_anchor_detached), fake_label
+                )
+                loss_D_2 = (loss_real_d2 + loss_fake_d2) / 2
                 loss_D_2.backward()
 
                 self.optimizer_D.step()
 
-            # Print epoch information.
+                # Optionally free up memory
+                del (
+                    real_1_anchor,
+                    real_1_positive,
+                    real_1_negative,
+                    real_2_anchor,
+                    real_2_positive,
+                    real_2_negative,
+                    fake_1_anchor,
+                    fake_1_positive,
+                    fake_1_negative,
+                    fake_2_anchor,
+                    fake_2_positive,
+                    fake_2_negative,
+                    recovered_1_anchor,
+                    recovered_2_anchor,
+                )
+
+            # ---------------------------
+            # Print epoch information
+            # ---------------------------
+            avg_gan_loss = gan_error_loss / len(train_data_loader_1)
+            avg_cycle_loss = cycle_error_loss / len(train_data_loader_1)
+            avg_triplet_loss = triplet_error_loss / len(train_data_loader_1)
+            avg_identity_loss = identity_error_loss / len(train_data_loader_1)
+
             print(
-                f"Epoch {epoch + 1}/{settings.EPOCHS}, "
-                f"Loss G: {loss_G.item()}, "
-                f"Loss D 1: {loss_D_1.item()}, "
-                f"Loss D 2: {loss_D_2.item()}"
+                f"Epoch {epoch + 1}/{self.epochs}, "
+                f"Loss G: {loss_G.item():.4f}, "
+                f"Loss D1: {loss_D_1.item():.4f}, "
+                f"Loss D2: {loss_D_2.item():.4f}, "
+                f"Avg GAN: {avg_gan_loss:.4f}, "
+                f"Avg Cycle: {avg_cycle_loss:.4f}, "
+                f"Avg Identity: {avg_identity_loss:.4f}, "
+                f"Triplet: {avg_triplet_loss:.4f}"
             )
-            self.identity_error_loss.append(identity_error_loss.cpu().detach().item())
-            self.gan_error_loss.append(gan_error_loss.cpu().detach().item())
-            self.cycle_error_loss.append(cycle_error_loss.cpu().detach().item())
+            self.gan_error_loss.append(avg_gan_loss)
+            self.cycle_error_loss.append(self.lambda_multiplier * avg_cycle_loss)
+            self.identity_error_loss.append(self.lambda_multiplier * avg_identity_loss)
+            self.triplet_error_loss.append(self.triplet_weight * avg_triplet_loss)
+
+            # ---------------------------
+            # Validate the models
+            # ---------------------------
+            # val_error_loss = self.validate(val_data_loader_1, val_data_loader_2)
+            # if val_error_loss < best_val_loss:
+            #     print("\tValidation loss improved, saving model.")
+            #     current_patience = 0
+            #     best_val_loss = val_error_loss
+            #     self.save_checkpoint_models()
+            # else:
+            #     current_patience += 1
+            #     print(f"\tValidation loss did not improve, patience: {current_patience}")
+            #     if current_patience >= self.patience:
+            #         print("\tEarly stopping triggered.")
+            #         break
+
+        # End of training
+        # print("Training complete, loading best model.")
+        # self.load_checkpoint_models()
 
     def generate(self, generator: Generator, data_loader):
         # Set the generator to evaluation mode.
@@ -259,11 +417,68 @@ class CycleGAN:
         # Set the generator back to training mode.
         generator.train()
 
+    def validate(self, val_data_loader_1, val_data_loader_2):
+        # Set the models to evaluation mode.
+        self.generator_1_to_2.eval()
+        self.generator_2_to_1.eval()
+
+        # Calculate identity loss.
+        cycle_error_loss = 0
+
+        with torch.no_grad():
+            for real_1_anchor, real_1_positive, real_1_negative in val_data_loader_1:
+                # Move data to the device.
+                real_1_anchor = real_1_anchor.to(self.device)
+
+                # Cycle loss.
+                recovered_1 = self.generator_2_to_1(
+                    self.generator_1_to_2(real_1_anchor)
+                )
+                loss_cycle_1 = self.criterion_cycle(recovered_1, real_1_anchor)
+                cycle_error_loss += loss_cycle_1
+
+                # Free up memory.
+                del real_1_anchor, real_1_positive, real_1_negative, recovered_1
+
+            for real_2_anchor, real_2_positive, real_2_negative in val_data_loader_2:
+                # Move data to the device.
+                real_2_anchor = real_2_anchor.to(self.device)
+
+                # Cycle loss.
+                recovered_2 = self.generator_1_to_2(
+                    self.generator_2_to_1(real_2_anchor)
+                )
+                loss_cycle_2 = self.criterion_cycle(recovered_2, real_2_anchor)
+                cycle_error_loss += loss_cycle_2
+
+                # Free up memory.
+                del real_2_anchor, real_2_positive, real_2_negative, recovered_2
+
+        # Models to training mode.
+        self.generator_1_to_2.train()
+        self.generator_2_to_1.train()
+
+        return self.lambda_multiplier * cycle_error_loss.cpu().detach().item()
+
     def save_models(self):
         torch.save(self.generator_1_to_2.state_dict(), settings.GENERATOR_1_TO_2_PATH)
         torch.save(self.generator_2_to_1.state_dict(), settings.GENERATOR_2_TO_1_PATH)
         torch.save(self.discriminator_1.state_dict(), settings.DISCRIMINATOR_1_PATH)
         torch.save(self.discriminator_2.state_dict(), settings.DISCRIMINATOR_2_PATH)
+
+    def save_checkpoint_models(self):
+        torch.save(
+            self.generator_1_to_2.state_dict(), settings.TEMP_GENERATOR_1_TO_2_PATH
+        )
+        torch.save(
+            self.generator_2_to_1.state_dict(), settings.TEMP_GENERATOR_2_TO_1_PATH
+        )
+        torch.save(
+            self.discriminator_1.state_dict(), settings.TEMP_DISCRIMINATOR_1_PATH
+        )
+        torch.save(
+            self.discriminator_2.state_dict(), settings.TEMP_DISCRIMINATOR_2_PATH
+        )
 
     def load_models(self):
         self.generator_1_to_2.load_state_dict(
@@ -274,3 +489,17 @@ class CycleGAN:
         )
         self.discriminator_1.load_state_dict(torch.load(settings.DISCRIMINATOR_1_PATH))
         self.discriminator_2.load_state_dict(torch.load(settings.DISCRIMINATOR_2_PATH))
+
+    def load_checkpoint_models(self):
+        self.generator_1_to_2.load_state_dict(
+            torch.load(settings.TEMP_GENERATOR_1_TO_2_PATH)
+        )
+        self.generator_2_to_1.load_state_dict(
+            torch.load(settings.TEMP_GENERATOR_2_TO_1_PATH)
+        )
+        self.discriminator_1.load_state_dict(
+            torch.load(settings.TEMP_DISCRIMINATOR_1_PATH)
+        )
+        self.discriminator_2.load_state_dict(
+            torch.load(settings.TEMP_DISCRIMINATOR_2_PATH)
+        )

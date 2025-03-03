@@ -32,14 +32,24 @@ class Settings(BaseSettings):
     DISCRIMINATOR_2_PATH: Path = CYCLEGAN_FOLDER_PATH / "discriminator_D.pth"
     CLASSIFIER_PATH: Path = MODEL_PATH / "classifier_C.pth"
 
+    # Temporary model paths
+    TEMP_FOLDER_PATH: Path = MODEL_PATH / "temp"
+    TEMP_GENERATOR_1_TO_2_PATH: Path = TEMP_FOLDER_PATH / "generator_C_to_D.pth"
+    TEMP_GENERATOR_2_TO_1_PATH: Path = TEMP_FOLDER_PATH / "generator_D_to_C.pth"
+    TEMP_DISCRIMINATOR_1_PATH: Path = TEMP_FOLDER_PATH / "discriminator_C.pth"
+    TEMP_DISCRIMINATOR_2_PATH: Path = TEMP_FOLDER_PATH / "discriminator_D.pth"
+
     # Batch parameters
-    BATCH_SIZE: int = 3
+    BATCH_SIZE: int = 1
     BATCH_SHUFFLE: bool = True
     BATCH_NUM_WORKERS: int = 2
 
     # Training parameters
-    EPOCHS: int = 20
+    EPOCHS: int = 50
     LR: float = 0.0002
+    LAMBDA_MULTIPLIER: float = 50.0
+    TRIPLET_WEIGHT: float = 0.5
+    PATIENCE: int = 5
 
     # Label values
     REAL_LABEL: float = 1.0

@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 from domain_shift.core.config import settings
 
 
-class BinndeDataset(Dataset):
+class BinnedDataset(Dataset):
     def __init__(self, dataframe: pd.DataFrame) -> None:
         """
         Args:
@@ -31,7 +31,7 @@ def get_data_loader(df: pd.DataFrame) -> DataLoader:
     """
     Returns a DataLoader instance for the given DataFrame.
     """
-    dataset = BinndeDataset(df)
+    dataset = BinnedDataset(df)
     return DataLoader(
         dataset,
         batch_size=settings.BATCH_SIZE,
