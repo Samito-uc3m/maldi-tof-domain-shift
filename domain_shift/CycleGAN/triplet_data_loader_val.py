@@ -108,7 +108,23 @@ class BinnedTripletDataset(Dataset):
         negative_binned = self.data.iloc[negative_index]["binned_6000"]
         negative = torch.tensor(negative_binned, dtype=torch.float32)
 
-        return anchor.unsqueeze(0), positive.unsqueeze(0), negative.unsqueeze(0)
+        # Map labels
+        anchor_species = self.species_list.index(anchor_species)
+        positive_species = self.species_list.index(
+            self.data.iloc[positive_index]["species"]
+        )
+        negative_species = self.species_list.index(
+            self.data.iloc[negative_index]["species"]
+        )
+
+        return (
+            anchor.unsqueeze(0),
+            torch.tensor(anchor_species, dtype=torch.long).unsqueeze(0),
+            positive.unsqueeze(0),
+            torch.tensor(positive_species, dtype=torch.long).unsqueeze(0),
+            negative.unsqueeze(0),
+            torch.tensor(negative_species, dtype=torch.long).unsqueeze(0),
+        )
 
 
 def get_data_loader(df: pd.DataFrame, augment: bool = True) -> DataLoader:

@@ -135,6 +135,7 @@ class CycleGAN:
         self.epochs = epochs
         self.patience = patience
         self.triplet_weight = triplet_weight
+        self.num_classes = num_classes
 
         # Initialize generators and discriminators
         self.generator_1_to_2 = Generator().to(self.device)
@@ -161,6 +162,7 @@ class CycleGAN:
         self.criterion_cycle = torch.nn.L1Loss().to(self.device)
         self.criterion_identity = torch.nn.L1Loss().to(self.device)
         self.criterion_triplet = nn.TripletMarginLoss().to(self.device)
+        self.criterion_crossentropy = nn.CrossEntropyLoss().to(self.device)
 
         # Error trackers
         self.gan_error_loss = []
@@ -168,13 +170,112 @@ class CycleGAN:
         self.triplet_error_loss = []
         self.identity_error_loss = []
 
+        # Validation models with softmax
+        self.validate_1 = nn.Sequential(
+            nn.Linear(6000, num_classes),
+        ).to(self.device)
+
+        self.validate_2 = nn.Sequential(
+            nn.Linear(6000, num_classes),
+        ).to(self.device)
+
+        # Optimizers for validation networks
+        self.optimizer_V1 = torch.optim.Adam(self.validate_1.parameters(), lr=lr)
+        self.optimizer_V2 = torch.optim.Adam(self.validate_2.parameters(), lr=lr)
+
+    def train_validation_networks(self, train_data_loader_1, train_data_loader_2):
+        """
+        Train the validation networks using CrossEntropy loss
+
+        Args:
+            train_data_loader_1: DataLoader for domain 1
+            train_data_loader_2: DataLoader for domain 2
+            labels_1: Class labels for domain 1 data
+            labels_2: Class labels for domain 2 data
+        """
+        # Set validation networks to training mode
+        self.validate_1.train()
+        self.validate_2.train()
+
+        # Train validation network 1 (for domain 1)
+        for epoch in range(1):  # Use a small number of epochs
+            running_loss = 0.0
+            for i, (
+                real_1_anchor,
+                real_1_label,
+                real_1_positive,
+                _,
+                real_1_negative,
+                _,
+            ) in enumerate(train_data_loader_1):
+                inputs = real_1_anchor.to(
+                    self.device
+                )  # Assuming data is (input, label)
+                labels = real_1_label.to(self.device)
+
+                # Flatten inputs
+                inputs_flat = inputs.view(inputs.size(0), -1)
+
+                # Zero the parameter gradients
+                self.optimizer_V1.zero_grad()
+
+                # Forward + backward + optimize
+                outputs = self.validate_1(inputs_flat)
+                loss = self.criterion_crossentropy(outputs, labels.squeeze())
+                loss.backward()
+                self.optimizer_V1.step()
+
+                running_loss += loss.item()
+
+            print(
+                f"Validation Net 1 - Epoch {epoch+1}, Loss: {running_loss/len(train_data_loader_1)}"
+            )
+
+        # Train validation network 2 (for domain 2)
+        for epoch in range(1):  # Use a small number of epochs
+            running_loss = 0.0
+            for i, (
+                real_2_anchor,
+                real_2_label,
+                real_2_positive,
+                _,
+                real_2_negative,
+                _,
+            ) in enumerate(train_data_loader_2):
+                inputs = real_2_anchor.to(self.device)
+                labels = real_2_label.to(self.device)
+
+                # Flatten inputs
+                inputs_flat = inputs.view(inputs.size(0), -1)
+
+                # Zero the parameter gradients
+                self.optimizer_V2.zero_grad()
+
+                # Forward + backward + optimize
+                outputs = self.validate_1(inputs_flat)
+                loss = self.criterion_crossentropy(outputs, labels.squeeze())
+                loss.backward()
+                self.optimizer_V2.step()
+
+                running_loss += loss.item()
+
+            print(
+                f"Validation Net 2 - Epoch {epoch+1}, Loss: {running_loss/len(train_data_loader_2)}"
+            )
+
+        # Set validation networks back to evaluation mode
+        self.validate_1.eval()
+        self.validate_2.eval()
+
     def train(
         self,
         train_data_loader_1,
         train_data_loader_2,
-        # val_data_loader_1,
-        # val_data_loader_2,
     ):
+        # First, train the validation networks
+        print("Training validation networks...")
+        self.train_validation_networks(train_data_loader_1, train_data_loader_2)
+
         # Set models to training mode
         self.generator_1_to_2.train()
         self.generator_2_to_1.train()
@@ -196,8 +297,8 @@ class CycleGAN:
             start_time = time.time()
 
             for i, (
-                (real_1_anchor, real_1_positive, real_1_negative),
-                (real_2_anchor, real_2_positive, real_2_negative),
+                (real_1_anchor, _, real_1_positive, _, real_1_negative, _),
+                (real_2_anchor, _, real_2_positive, _, real_2_negative, _),
             ) in enumerate(zip_repeat(train_data_loader_1, train_data_loader_2)):
                 # ---------------------
                 # Move triplets to device
@@ -408,11 +509,7 @@ class CycleGAN:
             # ---------------------------
             # Validate the models
             # ---------------------------
-            # val_error_loss = self.validate(val_data_loader_1, val_data_loader_2)
-            val_error_loss = (
-                self.triplet_weight * triplet_error_loss
-                + self.lambda_multiplier * avg_cycle_loss
-            )
+            val_error_loss = self.validate(train_data_loader_1, train_data_loader_2)
             if val_error_loss < best_val_loss:
                 print("\tValidation loss improved, saving model.")
                 current_patience = 0
@@ -446,53 +543,111 @@ class CycleGAN:
         generator.train()
 
     def validate(self, val_data_loader_1, val_data_loader_2):
-        # Set the models to evaluation mode.
+        """
+        Validate model using classification of synthetic data through trained validation networks
+        """
+        # Set the models to evaluation mode
         self.generator_1_to_2.eval()
         self.generator_2_to_1.eval()
+        self.validate_1.eval()
+        self.validate_2.eval()
 
-        # Calculate identity loss.
-        cycle_error_loss = 0
+        val_1_accuracy = 0
+        val_2_accuracy = 0
+        total_samples_1 = 0
+        total_samples_2 = 0
 
         with torch.no_grad():
-            for real_1_anchor, real_1_positive, real_1_negative in val_data_loader_1:
-                # Move data to the device.
+            # Domain 1 -> Domain 2 validation
+            for i, (
+                real_1_anchor,
+                real_1_labels,
+                real_1_positive,
+                _,
+                real_1_negative,
+                _,
+            ) in enumerate(val_data_loader_1):
+                # Move data to device
                 real_1_anchor = real_1_anchor.to(self.device)
+                batch_size = real_1_anchor.size(0)
+                total_samples_1 += batch_size
 
-                # Cycle loss.
-                recovered_1 = self.generator_2_to_1(
-                    self.generator_1_to_2(real_1_anchor)
-                )
-                loss_cycle_1 = self.criterion_cycle(recovered_1, real_1_anchor)
-                cycle_error_loss += loss_cycle_1
+                # Generate synthetic data
+                fake_2_anchor = self.generator_1_to_2(real_1_anchor)
 
-                # Free up memory.
-                del real_1_anchor, real_1_positive, real_1_negative, recovered_1
+                # Flatten for validation network
+                fake_2_flat = fake_2_anchor.view(batch_size, -1)
 
-            for real_2_anchor, real_2_positive, real_2_negative in val_data_loader_2:
-                # Move data to the device.
+                # Get classification outputs
+                outputs_2 = self.validate_2(fake_2_flat)
+                predicted_2 = torch.argmax(outputs_2, dim=1)
+
+                # Labels come from domain 1
+                expected_2 = real_1_labels.to(self.device).squeeze()
+
+                # Calculate accuracy
+                val_2_accuracy += (predicted_2 == expected_2).sum().item()
+
+                # Clean up
+                del real_1_anchor, real_1_positive, real_1_negative, fake_2_anchor
+
+            # Domain 2 -> Domain 1 validation
+            for i, (
+                real_2_anchor,
+                real_2_labels,
+                real_2_positive,
+                _,
+                real_2_negative,
+                _,
+            ) in enumerate(val_data_loader_2):
+                # Move data to device
                 real_2_anchor = real_2_anchor.to(self.device)
+                batch_size = real_2_anchor.size(0)
+                total_samples_2 += batch_size
 
-                # Cycle loss.
-                recovered_2 = self.generator_1_to_2(
-                    self.generator_2_to_1(real_2_anchor)
-                )
-                loss_cycle_2 = self.criterion_cycle(recovered_2, real_2_anchor)
-                cycle_error_loss += loss_cycle_2
+                # Generate synthetic data
+                fake_1_anchor = self.generator_2_to_1(real_2_anchor)
 
-                # Free up memory.
-                del real_2_anchor, real_2_positive, real_2_negative, recovered_2
+                # Flatten for validation network
+                fake_1_flat = fake_1_anchor.view(batch_size, -1)
 
-        # Models to training mode.
+                # Get classification outputs
+                outputs_1 = self.validate_1(fake_1_flat)
+                predicted_1 = torch.argmax(outputs_1, dim=1)
+
+                # Real labels come from domain 2
+                expected_1 = real_2_labels.to(self.device).squeeze()
+
+                # Calculate accuracy
+                val_1_accuracy += (predicted_1 == expected_1).sum().item()
+
+                # Clean up
+                del real_2_anchor, real_2_positive, real_2_negative, fake_1_anchor
+
+        # Calculate average accuracy and cycle loss
+        val_1_accuracy = val_1_accuracy / total_samples_1 if total_samples_1 > 0 else 0
+        val_2_accuracy = val_2_accuracy / total_samples_2 if total_samples_2 > 0 else 0
+
+        print(
+            f"Validation - Domain 1->2->1 Acc: {val_2_accuracy:.4f}, Domain 2->1->2 Acc: {val_1_accuracy:.4f}"
+        )
+
+        # Models back to training mode
         self.generator_1_to_2.train()
         self.generator_2_to_1.train()
 
-        return self.lambda_multiplier * cycle_error_loss.cpu().detach().item()
+        # Return weighted validation loss (combination of cycle consistency and classification accuracy)
+        # Lower is better, so we subtract accuracy from cycle loss
+        return 2 - (val_1_accuracy + val_2_accuracy)
 
     def save_models(self):
         torch.save(self.generator_1_to_2.state_dict(), settings.GENERATOR_1_TO_2_PATH)
         torch.save(self.generator_2_to_1.state_dict(), settings.GENERATOR_2_TO_1_PATH)
         torch.save(self.discriminator_1.state_dict(), settings.DISCRIMINATOR_1_PATH)
         torch.save(self.discriminator_2.state_dict(), settings.DISCRIMINATOR_2_PATH)
+        # Save validation networks
+        torch.save(self.validate_1.state_dict(), settings.VALIDATE_1_PATH)
+        torch.save(self.validate_2.state_dict(), settings.VALIDATE_2_PATH)
 
     def save_checkpoint_models(self):
         torch.save(
@@ -507,6 +662,9 @@ class CycleGAN:
         torch.save(
             self.discriminator_2.state_dict(), settings.TEMP_DISCRIMINATOR_2_PATH
         )
+        # Save validation networks
+        torch.save(self.validate_1.state_dict(), settings.TEMP_VALIDATE_1_PATH)
+        torch.save(self.validate_2.state_dict(), settings.TEMP_VALIDATE_2_PATH)
 
     def load_models(self):
         self.generator_1_to_2.load_state_dict(
@@ -517,6 +675,9 @@ class CycleGAN:
         )
         self.discriminator_1.load_state_dict(torch.load(settings.DISCRIMINATOR_1_PATH))
         self.discriminator_2.load_state_dict(torch.load(settings.DISCRIMINATOR_2_PATH))
+        # Load validation networks
+        self.validate_1.load_state_dict(torch.load(settings.VALIDATE_1_PATH))
+        self.validate_2.load_state_dict(torch.load(settings.VALIDATE_2_PATH))
 
     def load_checkpoint_models(self):
         self.generator_1_to_2.load_state_dict(
@@ -531,3 +692,6 @@ class CycleGAN:
         self.discriminator_2.load_state_dict(
             torch.load(settings.TEMP_DISCRIMINATOR_2_PATH)
         )
+        # Load validation networks
+        self.validate_1.load_state_dict(torch.load(settings.TEMP_VALIDATE_1_PATH))
+        self.validate_2.load_state_dict(torch.load(settings.TEMP_VALIDATE_2_PATH))

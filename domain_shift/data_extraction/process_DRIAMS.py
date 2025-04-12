@@ -28,7 +28,7 @@ def DRIAMS_bin_to_df(DRIAMS_ROOT: Path) -> pd.DataFrame:
             bin_6000 = pd.read_csv(bin_6000_path, sep="\s+")["binned_intensity"].values
             df.at[index, "binned_6000"] = bin_6000
         except FileNotFoundError:
-            print(f"File {bin_6000_path} not found")
+            # print(f"File {bin_6000_path} not found")
             df.at[index, "binned_6000"] = None
 
     # Filter by rows with bin 6000
