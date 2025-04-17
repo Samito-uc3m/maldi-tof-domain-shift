@@ -1,5 +1,6 @@
 import time
 from itertools import chain, cycle
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -531,3 +532,15 @@ class CycleGAN:
         self.discriminator_2.load_state_dict(
             torch.load(settings.TEMP_DISCRIMINATOR_2_PATH)
         )
+
+    def load_models_via_paths(
+        self,
+        generator_1_to_2_path: Path = settings.GENERATOR_1_TO_2_PATH,
+        generator_2_to_1_path: Path = settings.GENERATOR_2_TO_1_PATH,
+        discriminator_1_path: Path = settings.DISCRIMINATOR_1_PATH,
+        discriminator_2_path: Path = settings.DISCRIMINATOR_2_PATH,
+    ):
+        self.generator_1_to_2.load_state_dict(torch.load(generator_1_to_2_path))
+        self.generator_2_to_1.load_state_dict(torch.load(generator_2_to_1_path))
+        self.discriminator_1.load_state_dict(torch.load(discriminator_1_path))
+        self.discriminator_2.load_state_dict(torch.load(discriminator_2_path))
