@@ -139,6 +139,11 @@ class CycleGAN:
         self.criterion_cycle = torch.nn.L1Loss().to(self.device)
         self.criterion_identity = torch.nn.L1Loss().to(self.device)
 
+        # Error trackers
+        self.identity_error_loss = []
+        self.gan_error_loss = []
+        self.cycle_error_loss = []
+
     def train(self, data_loader_1, data_loader_2):
         # Set the models to training mode.
         self.generator_1_to_2.train()
@@ -147,7 +152,11 @@ class CycleGAN:
         self.discriminator_2.train()
 
         # Train the models.
+
         for epoch in range(settings.EPOCHS):
+            identity_error_loss = 0
+            gan_error_loss = 0
+            cycle_error_loss = 0
             for i, (real_1, real_2) in enumerate(zip(data_loader_1, data_loader_2)):
                 # Move data to the device.
                 real_1 = real_1.to(self.device)
@@ -190,15 +199,17 @@ class CycleGAN:
 
                 # Total loss.
                 loss_G = (
-                    loss_id_1
-                    + loss_id_2
-                    + loss_GAN_1_to_2
-                    + loss_GAN_2_to_1
-                    + loss_cycle_1_2_1
-                    + loss_cycle_2_1_2
+                    10 * (loss_id_1 + loss_id_2)
+                    + (loss_GAN_1_to_2 + loss_GAN_2_to_1)
+                    + 10 * (loss_cycle_1_2_1 + loss_cycle_2_1_2)
                 )
                 loss_G.backward()
                 self.optimizer_G.step()
+
+                # Update loss
+                identity_error_loss += loss_id_1 + loss_id_2
+                gan_error_loss += loss_GAN_1_to_2 + loss_GAN_2_to_1
+                cycle_error_loss += loss_cycle_1_2_1 + loss_cycle_2_1_2
 
                 # Train the discriminators.
                 self.optimizer_D.zero_grad()
@@ -223,11 +234,16 @@ class CycleGAN:
 
                 self.optimizer_D.step()
 
-                # Print the losses.
-                print(
-                    f"Epoch [{epoch}/{settings.EPOCHS}] Batch [{i}/{len(data_loader_1)}] "
-                    f"Loss G: {loss_G.item():.4f}, Loss D 1: {loss_D_1.item():.4f}, Loss D 2: {loss_D_2.item():.4f}"
-                )
+            # Print epoch information.
+            print(
+                f"Epoch {epoch + 1}/{settings.EPOCHS}, "
+                f"Loss G: {loss_G.item()}, "
+                f"Loss D 1: {loss_D_1.item()}, "
+                f"Loss D 2: {loss_D_2.item()}"
+            )
+            self.identity_error_loss.append(identity_error_loss.cpu().detach().item())
+            self.gan_error_loss.append(gan_error_loss.cpu().detach().item())
+            self.cycle_error_loss.append(cycle_error_loss.cpu().detach().item())
 
     def generate(self, generator: Generator, data_loader):
         # Set the generator to evaluation mode.

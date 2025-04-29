@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
@@ -11,16 +12,24 @@ if __name__ == "__main__":
     driams_2 = DRIAMS_bin_to_df(settings.DRIAMS_D_PATH)
 
     # Filter by the species with mora than 5 samples in b and c (intersection)
-    driams_1_species_counts = driams_1["species"].value_counts()
-    driams_2_species_counts = driams_2["species"].value_counts()
-    driams_1_species = driams_1_species_counts[driams_1_species_counts > 5].index
-    driams_2_species = driams_2_species_counts[driams_2_species_counts > 5].index
-    selected_species = driams_1_species.intersection(driams_2_species)
-    driams_1 = driams_1[driams_1["species"].isin(selected_species)]
-    driams_2 = driams_2[driams_2["species"].isin(selected_species)]
+    # driams_1_species_counts = driams_1["species"].value_counts()
+    # driams_2_species_counts = driams_2["species"].value_counts()
+    # driams_1_species = driams_1_species_counts[driams_1_species_counts > 5].index
+    # driams_2_species = driams_2_species_counts[driams_2_species_counts > 5].index
+    # selected_species = driams_1_species.intersection(driams_2_species)
+    # driams_1 = driams_1[driams_1["species"].isin(selected_species)]
+    # driams_2 = driams_2[driams_2["species"].isin(selected_species)]
+    most_represented_species = [
+        "Escherichia coli",
+        "Staphylococcus aureus",
+        "Enterococcus faecalis",
+        "Pseudomonas aeruginosa",
+    ]
+    driams_1 = driams_1[driams_1["species"].isin(most_represented_species)]
+    driams_2 = driams_2[driams_2["species"].isin(most_represented_species)]
 
     # Map the species to integers
-    species_map = {species: i for i, species in enumerate(selected_species)}
+    species_map = {species: i for i, species in enumerate(most_represented_species)}
     driams_1["species"] = driams_1["species"].map(species_map)
     driams_2["species"] = driams_2["species"].map(species_map)
 
@@ -57,3 +66,7 @@ if __name__ == "__main__":
     driams_2_predictions = clf.predict(driams_2_binned_data)
     driams_2_f1 = f1_score(driams_2_labels, driams_2_predictions, average="weighted")
     print(f"f1 with driams 2 data: {driams_2_f1}")
+
+    # Save the model
+    print("Saving the model...")
+    torch.save(clf, settings.CLASSIFIER_PATH)
